@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Game Menyusun Kata Hewan</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- MediaPipe Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #0f172a; 
+            font-family: 'Inter', sans-serif;
+            touch-action: none;
+        }
+
+        #game-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.7);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: white;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+        }
+    </style>
+</head>
+<body>
+
+    <video id="input_video" style="display: none;" playsinline></video>
+    <canvas id="game-canvas"></canvas>
+
+    <!-- UI Layer -->
+    <div id="ui-layer" class="p-4">
+        <!-- Top Bar -->
+        <div class="flex justify-between items-center w-full max-w-6xl mx-auto">
+            <div class="glass-panel px-6 py-3 rounded-2xl flex items-center gap-4">
+                <div class="text-yellow-400 font-bold text-2xl">🏆 Skor: <span id="score-display">0</span></div>
+            </div>
+            
+            <div class="glass-panel px-6 py-3 rounded-2xl flex items-center gap-4">
+                <div class="text-blue-300 font-bold text-2xl">⏱️ Waktu: <span id="timer-display">00:00</span></div>
+            </div>
+        </div>
+
+        <!-- Instructions -->
+        <div class="glass-panel px-8 py-4 rounded-2xl mx-auto mt-4 text-center max-w-3xl">
+            <h1 class="text-3xl font-extrabold text-green-400 mb-2 tracking-wide uppercase">Tebak Kata Hewan</h1>
+            <p class="text-md text-gray-200">
+                👆 <b>Acungkan Telunjuk</b> untuk MENGAMBIL & MENYERET huruf.<br/>
+                🖐️ <b>Buka Semua Jari</b> untuk MELEPASKAN huruf ke kotak yang tepat.
+            </p>
+        </div>
+
+        <!-- Loading state -->
+        <div id="loading-indicator" class="glass-panel mx-auto mb-12 px-8 py-4 rounded-xl text-xl font-bold text-cyan-300 animate-pulse mt-auto">
+            ⚙️ Menyiapkan Kamera dan AI... Mohon Tunggu.
+        </div>
+        <div style="flex-grow: 1;"></div>
+    </div>
+
+    <script>
+        // --- 1. GAME DATA & VARIABLES ---
+        const wordData = [
+            { clue: 'Hewan besar belalai panjang', word: 'GAJAH' },
+            { clue: 'Raja hutan bersurai', word: 'SINGA' },
+            { clue: 'Leher sangat panjang', word: 'JERAPAH' },
+            { clue: 'Hewan yang suka mengeong', word: 'KUCING' },
+            { clue: 'Hewan yang menggonggong', word: 'ANJING' },
+            { clue: 'Suka makan pisang & memanjat', word: 'MONYET' },
+            { clue: 'Kucing besar belang-belang', word: 'HARIMAU' },
+            { clue: 'Punya cula di moncongnya', word: 'BADAK' },
+            { clue: 'Menghasilkan susu', word: 'SAPI' },
+            { clue: 'Bisa ditunggangi, berlari cepat', word: 'KUDA' },
+            { clue: 'Berkokok di pagi hari', word: 'AYAM' },
+            { clue: 'Berenang dan berbunyi kwek-kwek', word: 'BEBEK' },
+            { clue: 'Bisa terbang di langit', word: 'BURUNG' },
+            { clue: 'Berenang di air dengan sirip', word: 'IKAN' },
+            { clue: 'Mamalia raksasa di laut', word: 'PAUS' },
+            { clue: 'Predator ganas di laut', word: 'HIU' },
+            { clue: 'Bisa melompat dan hidup di dua alam', word: 'KATAK' },
+            { clue: 'Hewan melata tanpa kaki', word: 'ULAR' },
+            { clue: 'Suka merayap di dinding', word: 'CICAK' },
+            { clue: 'Reptil besar bergerigi di sungai', word: 'BUAYA' },
+            { clue: 'Serangga penghasil madu', word: 'LEBAH' },
+            { clue: 'Serangga kecil suka makanan manis', word: 'SEMUT' },
+            { clue: 'Hewan pengerat kecil', word: 'TIKUS' },
+            { clue: 'Telinga panjang, suka makan wortel', word: 'KELINCI' },
+            { clue: 'Hewan melompat dari Australia', word: 'KANGURU' }
+        ];
+        
+        let shuffledWords = [...wordData].sort(() => 0.5 - Math.random());
+        let currentWordIndex = 0;
+        let slots = [];
+        let letters = [];
+        let grabbedLetter = null;
+        let isGameWon = false;
+        
+        let score = 0;
+        let timeElapsed = 0;
+        let timerInterval = null;
+        let lastFrameTime = performance.now();
+
+        let particles = []; // For confetti
+
+        const COLORS = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#14b8a6', '#f43f5e'];
+
+        // DOM Elements
+        const canvasElement = document.getElementById('game-canvas');
+        const canvasCtx = canvasElement.getContext('2d', { alpha: false });
+        const videoElement = document.getElementById('input_video');
+        const loadingIndicator = document.getElementById('loading-indicator');
+        const scoreDisplay = document.getElementById('score-display');
+        const timerDisplay = document.getElementById('timer-display');
+
+        // --- 2. AUDIO SYSTEM (Web Audio API) ---
+        let audioCtx = null;
+        let audioInitialized = false;
+
+        function initAudio() {
+            if (!audioInitialized) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                audioInitialized = true;
+            }
+            if (audioCtx && audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        function playTone(freq, type, duration, vol=0.1) {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+            gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + duration);
+        }
+
+        function playPop() {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.frequency.setValueAtTime(400, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.1);
+            gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.1);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.1);
+        }
+
+        function playTing() {
+            playTone(880, 'sine', 0.5, 0.3); // A5
+            setTimeout(() => playTone(1760, 'sine', 0.8, 0.1), 50); // A6 ping
+        }
+
+        function playSuccess() {
+            const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
+            notes.forEach((freq, i) => {
+                setTimeout(() => playTone(freq, i === 3 ? 'triangle' : 'sine', 0.5, 0.2), i * 150);
+            });
+        }
+
+        // --- 3. CONFETTI SYSTEM ---
+        function createConfetti() {
+            particles = [];
+            for (let i = 0; i < 150; i++) {
+                particles.push({
+                    x: Math.random() * canvasElement.width,
+                    y: Math.random() * canvasElement.height * 0.5 - canvasElement.height * 0.5, // Start above
+                    vx: (Math.random() - 0.5) * 10,
+                    vy: Math.random() * 5 + 5,
+                    size: Math.random() * 10 + 5,
+                    color: COLORS[Math.floor(Math.random() * COLORS.length)],
+                    rotation: Math.random() * 360,
+                    rotSpeed: (Math.random() - 0.5) * 10
+                });
+            }
+        }
+
+        function updateAndDrawConfetti() {
+            particles.forEach((p, index) => {
+                p.x += p.vx;
+                p.y += p.vy;
+                p.vy += 0.2; // Gravity
+                p.rotation += p.rotSpeed;
+
+                canvasCtx.save();
+                canvasCtx.translate(p.x, p.y);
+                canvasCtx.rotate(p.rotation * Math.PI / 180);
+                canvasCtx.fillStyle = p.color;
+                canvasCtx.fillRect(-p.size/2, -p.size/2, p.size, p.size);
+                canvasCtx.restore();
+
+                if (p.y > canvasElement.height) {
+                    particles.splice(index, 1);
+                }
+            });
+        }
+
+        // --- 4. GAME LOGIC ---
+        function formatTime(seconds) {
+            const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+            const s = (seconds % 60).toString().padStart(2, '0');
+            return `${m}:${s}`;
+        }
+
+        function startTimer() {
+            if(timerInterval) clearInterval(timerInterval);
+            timerInterval = setInterval(() => {
+                if(!isGameWon) {
+                    timeElapsed++;
+                    timerDisplay.innerText = formatTime(timeElapsed);
+                }
+            }, 1000);
+        }
+
+        function resizeCanvas() {
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+            loadWord(); // Reload to adjust layouts
+        }
+        window.addEventListener('resize', resizeCanvas);
+
+        function loadWord() {
+            isGameWon = false;
+            grabbedLetter = null;
+            particles = [];
+            
+            const currentData = shuffledWords[currentWordIndex];
+            const wordStr = currentData.word;
+            
+            // Layout calculations
+            slots = [];
+            const isMobile = canvasElement.width < 768;
+            const maxSlotSize = isMobile ? 50 : 80;
+            const slotSpacing = isMobile ? 10 : 20;
+            const slotSize = Math.min(maxSlotSize, (canvasElement.width - 40) / wordStr.length - slotSpacing);
+            
+            const totalWidth = (wordStr.length * slotSize) + ((wordStr.length - 1) * slotSpacing);
+            const startX = (canvasElement.width - totalWidth) / 2;
+            const startY = isMobile ? 220 : 250; 
+            
+            for(let i = 0; i < wordStr.length; i++) {
+                slots.push({
+                    char: wordStr[i],
+                    x: startX + i * (slotSize + slotSpacing) + slotSize / 2,
+                    y: startY + slotSize / 2,
+                    size: slotSize,
+                    isFilled: false
+                });
+            }
+            
+            letters = [];
+            let shuffledWord = wordStr.split('').sort(() => 0.5 - Math.random());
+            const radius = slotSize * 0.45;
+            
+            for(let i = 0; i < shuffledWord.length; i++) {
+                const minX = radius * 3;
+                const maxX = canvasElement.width - radius * 3;
+                const minY = startY + slotSize * 2; 
+                const maxY = canvasElement.height - radius * 3;
+                
+                letters.push({
+                    char: shuffledWord[i],
+                    x: minX + Math.random() * (maxX - minX),
+                    y: minY + Math.random() * (maxY - minY),
+                    radius: radius,
+                    color: COLORS[i % COLORS.length],
+                    isLocked: false
+                });
+            }
+        }
+
+        function detectGesture(landmarks) {
+            // Y coordinates: 0 is top, 1 is bottom. Smaller Y means higher up.
+            // Fingers: Index (8, 6), Middle (12, 10), Ring (16, 14), Pinky (20, 18)
+            const isIndexUp = landmarks[8].y < landmarks[6].y;
+            const isMiddleUp = landmarks[12].y < landmarks[10].y;
+            const isRingUp = landmarks[16].y < landmarks[14].y;
+            const isPinkyUp = landmarks[20].y < landmarks[18].y;
+
+            // Strict Pointing: Index is up, others are explicitly DOWN
+            const isPointing = isIndexUp && !isMiddleUp && !isRingUp && !isPinkyUp;
+            
+            // Open Hand: All fingers are UP
+            const isOpenHand = isIndexUp && isMiddleUp && isRingUp && isPinkyUp;
+
+            return { isPointing, isOpenHand };
+        }
+
+        function checkWinCondition() {
+            if (slots.every(slot => slot.isFilled)) {
+                isGameWon = true;
+                score += 100;
+                scoreDisplay.innerText = score;
+                playSuccess();
+                createConfetti();
+                
+                setTimeout(() => {
+                    currentWordIndex++;
+                    if(currentWordIndex >= shuffledWords.length) {
+                        // Reshuffle and loop
+                        shuffledWords = [...wordData].sort(() => 0.5 - Math.random());
+                        currentWordIndex = 0;
+                    }
+                    loadWord();
+                }, 4000);
+            }
+        }
+
+        const HAND_CONNECTIONS = [
+            [0,1],[1,2],[2,3],[3,4],
+            [0,5],[5,6],[6,7],[7,8],
+            [5,9],[9,10],[10,11],[11,12],
+            [9,13],[13,14],[14,15],[15,16],
+            [13,17],[17,18],[18,19],[19,20],[0,17]
+        ];
+
+        // --- 5. RENDER & UPDATE LOOP (MediaPipe Callback) ---
+        function onResults(results) {
+            if (loadingIndicator.style.display !== 'none') {
+                loadingIndicator.style.display = 'none';
+                resizeCanvas(); 
+                startTimer();
+            }
+
+            initAudio(); // Try initializing audio on every frame (will only execute once user interacts)
+
+            canvasCtx.save();
+
+            // Calculate scaling to fill canvas while maintaining aspect ratio
+            const vRatio = canvasElement.width / results.image.width;
+            const hRatio = canvasElement.height / results.image.height;
+            const ratio = Math.max(vRatio, hRatio);
+            const centerShift_x = (canvasElement.width - results.image.width * ratio) / 2;
+            const centerShift_y = (canvasElement.height - results.image.height * ratio) / 2;
+
+            // 1. Draw WebCam Image (Mirrored)
+            canvasCtx.save();
+            canvasCtx.scale(-1, 1);
+            canvasCtx.translate(-canvasElement.width, 0);
+            canvasCtx.drawImage(
+                results.image, 
+                0, 0, results.image.width, results.image.height,
+                centerShift_x, centerShift_y, results.image.width * ratio, results.image.height * ratio
+            );
+            canvasCtx.restore();
+            
+            // Dark Overlay
+            canvasCtx.fillStyle = 'rgba(15, 23, 42, 0.6)';
+            canvasCtx.fillRect(0, 0, canvasElement.width, canvasElement.height);
+
+            let cursorX = null;
+            let cursorY = null;
+            let gestures = { isPointing: false, isOpenHand: false };
+
+            // 2. Process Hand Landmarks
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0]; // Process first detected hand
+                
+                // Mapped index finger tip coordinates (Mirrored)
+                cursorX = centerShift_x + (1 - landmarks[8].x) * (results.image.width * ratio);
+                cursorY = centerShift_y + landmarks[8].y * (results.image.height * ratio);
+
+                gestures = detectGesture(landmarks);
+
+                // Draw Hand Skeleton
+                canvasCtx.lineWidth = 5;
+                if (gestures.isPointing) canvasCtx.strokeStyle = '#38bdf8'; // Sky blue
+                else if (gestures.isOpenHand) canvasCtx.strokeStyle = '#4ade80'; // Green
+                else canvasCtx.strokeStyle = '#94a3b8'; // Slate
+                
+                HAND_CONNECTIONS.forEach(conn => {
+                    const start = landmarks[conn[0]];
+                    const end = landmarks[conn[1]];
+                    const startX = centerShift_x + (1 - start.x) * (results.image.width * ratio);
+                    const startY = centerShift_y + start.y * (results.image.height * ratio);
+                    const endX = centerShift_x + (1 - end.x) * (results.image.width * ratio);
+                    const endY = centerShift_y + end.y * (results.image.height * ratio);
+
+                    canvasCtx.beginPath();
+                    canvasCtx.moveTo(startX, startY);
+                    canvasCtx.lineTo(endX, endY);
+                    canvasCtx.stroke();
+                });
+
+                // Highlight joints
+                landmarks.forEach((lm, index) => {
+                    const x = centerShift_x + (1 - lm.x) * (results.image.width * ratio);
+                    const y = centerShift_y + lm.y * (results.image.height * ratio);
+                    canvasCtx.beginPath();
+                    canvasCtx.arc(x, y, index === 8 ? 10 : 5, 0, 2 * Math.PI);
+                    canvasCtx.fillStyle = index === 8 && gestures.isPointing ? '#fde047' : '#ffffff';
+                    canvasCtx.fill();
+                });
+            }
+
+            // 3. Game Interaction Logic
+            if (cursorX !== null && cursorY !== null && !isGameWon) {
+                // Grab Logic
+                if (gestures.isPointing && !grabbedLetter) {
+                    for (let i = letters.length - 1; i >= 0; i--) {
+                        let l = letters[i];
+                        if (!l.isLocked) {
+                            const dist = Math.hypot(cursorX - l.x, cursorY - l.y);
+                            if (dist < l.radius * 1.8) { 
+                                grabbedLetter = l;
+                                playPop();
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Drag Logic
+                if (grabbedLetter) {
+                    // Smooth follow
+                    grabbedLetter.x += (cursorX - grabbedLetter.x) * 0.5;
+                    grabbedLetter.y += (cursorY - grabbedLetter.y) * 0.5;
+                }
+
+                // Drop Logic
+                if (gestures.isOpenHand && grabbedLetter) {
+                    let snapped = false;
+                    for (let i = 0; i < slots.length; i++) {
+                        let slot = slots[i];
+                        if (!slot.isFilled && slot.char === grabbedLetter.char) {
+                            const dist = Math.hypot(grabbedLetter.x - slot.x, grabbedLetter.y - slot.y);
+                            if (dist < slot.size * 1.2) {
+                                // Snap!
+                                grabbedLetter.x = slot.x;
+                                grabbedLetter.y = slot.y;
+                                grabbedLetter.isLocked = true;
+                                slot.isFilled = true;
+                                snapped = true;
+                                playTing();
+                                checkWinCondition();
+                                break;
+                            }
+                        }
+                    }
+                    grabbedLetter = null; 
+                }
+            } else if (!gestures.isPointing) {
+                grabbedLetter = null; // Auto drop if not pointing
+            }
+
+            // 4. Render Game Entities
+            const currentData = shuffledWords[currentWordIndex];
+
+            // Render Clue Text
+            canvasCtx.fillStyle = '#fde047';
+            canvasCtx.font = "bold 26px 'Inter', sans-serif";
+            canvasCtx.textAlign = 'center';
+            canvasCtx.textBaseline = 'middle';
+            canvasCtx.shadowColor = 'rgba(0,0,0,0.9)';
+            canvasCtx.shadowBlur = 8;
+            canvasCtx.fillText(`Petunjuk: "${currentData.clue}"`, canvasElement.width / 2, slots[0]?.y - 60 || 160);
+            canvasCtx.shadowBlur = 0;
+
+            // Render Slots
+            slots.forEach(slot => {
+                canvasCtx.beginPath();
+                canvasCtx.roundRect(slot.x - slot.size/2, slot.y - slot.size/2, slot.size, slot.size, 12);
+                
+                if (slot.isFilled) {
+                    canvasCtx.fillStyle = 'rgba(74, 222, 128, 0.3)'; // Greenish fill
+                    canvasCtx.strokeStyle = '#4ade80';
+                    canvasCtx.lineWidth = 4;
+                } else {
+                    canvasCtx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+                    canvasCtx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+                    canvasCtx.lineWidth = 2;
+                }
+                
+                canvasCtx.fill();
+                canvasCtx.stroke();
+            });
+
+            // Render Letters
+            letters.forEach(l => {
+                canvasCtx.beginPath();
+                canvasCtx.arc(l.x, l.y, l.radius, 0, 2 * Math.PI);
+                
+                if (l.isLocked) {
+                    canvasCtx.fillStyle = '#4ade80'; // Success green
+                } else if (grabbedLetter === l) {
+                    canvasCtx.fillStyle = '#fbbf24'; // Amber when grabbed
+                    canvasCtx.shadowColor = 'rgba(0,0,0,0.8)';
+                    canvasCtx.shadowBlur = 20;
+                } else {
+                    canvasCtx.fillStyle = l.color; 
+                    canvasCtx.shadowColor = 'rgba(0,0,0,0.5)';
+                    canvasCtx.shadowBlur = 10;
+                }
+                
+                canvasCtx.fill();
+                
+                // Border
+                canvasCtx.lineWidth = 4;
+                canvasCtx.strokeStyle = l.isLocked ? '#16a34a' : 'rgba(255,255,255,0.8)';
+                canvasCtx.stroke();
+                
+                // Text
+                canvasCtx.fillStyle = '#ffffff';
+                canvasCtx.font = `bold ${l.radius * 1.1}px 'Inter', sans-serif`;
+                canvasCtx.textAlign = 'center';
+                canvasCtx.textBaseline = 'middle';
+                canvasCtx.shadowBlur = 0; 
+                canvasCtx.fillText(l.char, l.x, l.y + (l.radius * 0.1));
+            });
+
+            // 5. Win State Render & Confetti
+            if (isGameWon) {
+                updateAndDrawConfetti();
+
+                canvasCtx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+                canvasCtx.fillRect(0, 0, canvasElement.width, canvasElement.height);
+
+                canvasCtx.fillStyle = '#4ade80'; 
+                canvasCtx.font = "900 64px 'Inter', sans-serif";
+                canvasCtx.textAlign = 'center';
+                canvasCtx.textBaseline = 'middle';
+                canvasCtx.shadowColor = '#16a34a';
+                canvasCtx.shadowBlur = 20;
+                canvasCtx.fillText("LUAR BIASA!", canvasElement.width / 2, canvasElement.height / 2 - 40);
+                
+                canvasCtx.fillStyle = '#fde047';
+                canvasCtx.font = "bold 32px 'Inter', sans-serif";
+                canvasCtx.shadowBlur = 0;
+                canvasCtx.fillText(`Hewan itu adalah ${currentData.word}!`, canvasElement.width / 2, canvasElement.height / 2 + 40);
+                
+                canvasCtx.fillStyle = '#e2e8f0';
+                canvasCtx.font = "20px 'Inter', sans-serif";
+                canvasCtx.fillText("Menyiapkan hewan berikutnya...", canvasElement.width / 2, canvasElement.height / 2 + 100);
+            }
+
+            canvasCtx.restore();
+        }
+
+        // --- 6. INITIALIZATION ---
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }});
+        
+        hands.setOptions({
+            maxNumHands: 1, 
+            modelComplexity: 1,
+            minDetectionConfidence: 0.7, 
+            minTrackingConfidence: 0.7
+        });
+        
+        hands.onResults(onResults);
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 640,
+            height: 480
+        });
+
+        camera.start().catch(err => {
+            console.error("Camera error:", err);
+            loadingIndicator.innerHTML = "❌ Gagal mengakses kamera. Pastikan izin kamera diizinkan di browser Anda.";
+            loadingIndicator.classList.remove('animate-pulse', 'text-cyan-300');
+            loadingIndicator.classList.add('text-red-500');
+        });
+
+    </script>
+</body>
+</html>
